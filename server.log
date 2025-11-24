@@ -1,0 +1,12 @@
+nohup: ignoring input
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
+[[36m11/24/2025, 22:40:35:810[39m] [[33mserver[39m] [32mServer[39m {
+  ice: [],
+  host: { password_enabled: [33mfalse[39m, password: [32m''[39m },
+  api_key_secret: [90mundefined[39m,
+  api_docs: [32m'http://localhost:4000/api/v1/docs'[39m,
+  running_at: [32m'http://localhost:4000'[39m,
+  environment: [32m'development'[39m,
+  appVersion: [32m'1.2.75'[39m,
+  nodeVersion: [32m'22.21.1'[39m
+}

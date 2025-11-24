@@ -128,13 +128,18 @@ Easily integrate `Call-Me` into your website or application with a [simple ifram
 Get all connected users
 
 ```shell
-# Get all connected users
-curl -X GET "http://localhost:8000/api/v1/users" -H "authorization: call_me_api_key_secret" -H "Content-Type: application/json"
-curl -X GET "https://cme.mirotalk.com/api/v1/users" -H "authorization: call_me_api_key_secret" -H "Content-Type: application/json"
+# Get all connected users (protected)
+# You can authorize either with the legacy API key header (`authorization: <API_KEY>`) or with a
+# Bearer JWT token returned from the auth endpoints.
 
-# Generate call links for connected users to call
-curl -X GET "http://localhost:8000/api/v1/connected?user=call-me" -H "authorization: call_me_api_key_secret" -H "Content-Type: application/json"
-curl -X GET "https://cme.mirotalk.com/api/v1/connected?user=call-me" -H "authorization: call_me_api_key_secret" -H "Content-Type: application/json"
+# Example using Bearer token (preferred)
+curl -X GET "http://localhost:4000/api/v1/users" -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json"
+
+# Example using API key (legacy)
+curl -X GET "http://localhost:4000/api/v1/users" -H "authorization: call_me_api_key_secret" -H "Content-Type: application/json"
+
+# Generate call links for connected users to call (protected)
+curl -X GET "http://localhost:4000/api/v1/connected?user=call-me" -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json"
 ```
 
 Docs: http://localhost:8000/api/v1/docs/ or you can check it out live in prod [here](https://cme.mirotalk.com/api/v1/docs/).

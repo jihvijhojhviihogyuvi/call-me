@@ -14,6 +14,8 @@ const path = require('path');
 const yaml = require('js-yaml');
 const swaggerUi = require('swagger-ui-express');
 const packageJson = require('../package.json');
+const jwt = require('jsonwebtoken');
+const userStore = require('./userStore');
 
 // Logs
 const logs = require('./logs');
@@ -47,6 +49,9 @@ const config = {
     apiBasePath: '/api/v1',
     swaggerDocument: yaml.load(fs.readFileSync(path.join(__dirname, '/api/swagger.yaml'), 'utf8')),
 };
+
+// Authentication secret used to sign JWT tokens
+const AUTH_SECRET = config.apiKeySecret || process.env.AUTH_SECRET || 'dev_secret';
 
 // If no room password is specified, a random one is generated (if room password is enabled)
 config.hostPassword = process.env.HOST_PASSWORD || (config.hostPasswordEnabled ? generatePassword() : '');
@@ -170,6 +175,38 @@ app.use(express.static(PUBLIC_DIR)); // Serve static files from the 'public' dir
 app.use(express.json()); // Api parse body data as json
 app.use(config.apiBasePath + '/docs', swaggerUi.serve, swaggerUi.setup(config.swaggerDocument)); // api docs
 
+// --- Simple Auth endpoints (signup / login) ---
+app.post(`${config.apiBasePath}/auth/signup`, (req, res) => {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+    if (!isValidUsername(username)) return res.status(400).json({ error: 'Invalid username format' });
+    try {
+        userStore.createUser(username, password);
+        const token = jwt.sign({ username }, AUTH_SECRET, { expiresIn: '7d' });
+        return res.json({ token });
+    } catch (err) {
+        return res.status(400).json({ error: err.message });
+    }
+});
+
+app.post(`${config.apiBasePath}/auth/login`, (req, res) => {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+    try {
+        // Check if account exists first
+        if (!userStore.userExists(username)) {
+            return res.status(404).json({ error: "Account doesn't exist" });
+        }
+
+        const ok = userStore.verifyUser(username, password);
+        if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+        const token = jwt.sign({ username }, AUTH_SECRET, { expiresIn: '7d' });
+        return res.json({ token });
+    } catch (err) {
+        return res.status(500).json({ error: 'Internal error' });
+    }
+});
+
 // Logs requests
 app.use((req, res, next) => {
     log.debug('New request', {
@@ -234,17 +271,8 @@ app.get('/join/', (req, res) => {
     return notFound(res);
 });
 
-app.get(`${config.apiBasePath}/connected`, (req, res) => {
-    // Check if the user is authorized for this API call
-    if (!isAuthorized(req)) {
-        log.debug('Unauthorized API call: Get Connected', {
-            headers: req.headers,
-            body: req.body,
-        });
-        return res.status(403).json({ error: 'Unauthorized!' });
-    }
-
-    //log.debug(req.query);
+app.get(`${config.apiBasePath}/connected`, authMiddleware, (req, res) => {
+    // log.debug(req.query);
     const { user } = req.query;
     if (!user) {
         return res.status(400).json({ error: 'User not provided in request query' });
@@ -256,34 +284,22 @@ app.get(`${config.apiBasePath}/connected`, (req, res) => {
     // Generate the password part dynamically based on hostPasswordEnabled
     const password = config.hostPasswordEnabled ? `&password=${config.hostPassword}` : '';
 
-    // Retrieve the list of connected users (ensure this returns an iterable like Map or Array)
+    // Retrieve the list of connected users
     const users = getConnectedUsers();
-    if (!users || typeof users.values !== 'function') {
-        return res.status(500).json({ error: 'Unable to retrieve connected users' });
-    }
 
     // Generate a list of user-to-call links for the provided user
-    const connected = Array.from(users.values()).reduce((acc, connectedUser) => {
+    const connected = users.reduce((acc, connectedUser) => {
         if (user !== connectedUser) {
             acc.push(`${baseUrl}/join?user=${user}&call=${connectedUser}${password}`);
         }
         return acc;
     }, []);
 
-    // Return the list of connected users that the provided user can call
     return res.json({ connected });
 });
 
 // Axios API requests
-app.get(`${config.apiBasePath}/users`, (req, res) => {
-    // check if user is authorized for the API call
-    if (!isAuthorized(req)) {
-        log.debug('Unauthorized API call: Get Users', {
-            headers: req.headers,
-            body: req.body,
-        });
-        return res.status(403).json({ error: 'Unauthorized!' });
-    }
+app.get(`${config.apiBasePath}/users`, authMiddleware, (req, res) => {
     // Retrieve the list of connected users
     const users = getConnectedUsers();
     return res.json({ users });
@@ -322,6 +338,33 @@ const isAuthorized = (req) => {
     const { authorization } = req.headers;
     return authorization === config.apiKeySecret;
 };
+
+// Authentication middleware: accepts either API key (authorization header equals apiKeySecret)
+// or a Bearer JWT token signed with AUTH_SECRET. If valid, `req.auth` will contain decoded token.
+function authMiddleware(req, res, next) {
+    const auth = req.headers.authorization || '';
+
+    // Allow legacy exact API key match
+    if (auth && auth === config.apiKeySecret) {
+        req.auth = { type: 'api_key' };
+        return next();
+    }
+
+    // Bearer token
+    if (auth && auth.toLowerCase().startsWith('bearer ')) {
+        const token = auth.split(' ')[1];
+        try {
+            const decoded = jwt.verify(token, AUTH_SECRET);
+            req.auth = { type: 'jwt', payload: decoded };
+            return next();
+        } catch (err) {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+    }
+
+    // No valid auth provided
+    return res.status(401).json({ error: 'Unauthorized' });
+}
 
 // Function to handle individual WebSocket connections
 function handleConnection(socket) {
@@ -389,7 +432,7 @@ function handleConnection(socket) {
 
     // Function to handle user sign-in request
     function handleSignIn(data) {
-        const { name } = data;
+        const { name, token } = data;
 
         const isValidName = isValidUsername(name);
         log.debug('isValidName', { username: name, valid: isValidName });
@@ -401,6 +444,21 @@ function handleConnection(socket) {
                     'Invalid username.<br/> Allowed letters, numbers, underscores, periods, hyphens, and @. Length: 3-36 characters.',
             });
             return;
+        }
+
+        // If token is provided, verify JWT and ensure username match
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, AUTH_SECRET);
+                if (!decoded || decoded.username !== name) {
+                    sendMsgTo(socket, { type: 'signIn', success: false, message: 'Invalid token for user' });
+                    return;
+                }
+            } catch (err) {
+                log.debug('Token verification failed', err.message);
+                sendMsgTo(socket, { type: 'signIn', success: false, message: 'Invalid token' });
+                return;
+            }
         }
 
         if (!users.has(name)) {

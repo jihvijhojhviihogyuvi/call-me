@@ -18,7 +18,9 @@ const sessionTime = document.getElementById('sessionTime');
 const githubDiv = document.getElementById('githubDiv');
 const signInPage = document.getElementById('signInPage');
 const usernameIn = document.getElementById('usernameIn');
+const passwordIn = document.getElementById('passwordIn');
 const signInBtn = document.getElementById('signInBtn');
+const signUpBtn = document.getElementById('signUpBtn');
 const roomPage = document.getElementById('roomPage');
 const exitSidebarBtn = document.getElementById('exitSidebarBtn');
 const userSidebar = document.getElementById('userSidebar');
@@ -457,6 +459,7 @@ async function handleEnumerateDevices() {
 // Handle Listeners
 function handleListeners() {
     signInBtn.addEventListener('click', handleSignInClick);
+    signUpBtn.addEventListener('click', handleSignUpClick);
     shareRoomBtn.addEventListener('click', async () => {
         await handleShareRoomClick();
     });
@@ -566,14 +569,57 @@ function handleKeyUp(e, callback) {
 }
 
 // Handle sign-in button click
-function handleSignInClick() {
+async function handleSignInClick() {
     userName = usernameIn.value.trim();
-    if (userName.length > 0) {
-        sendMsg({
-            type: 'signIn',
-            name: userName,
-        });
-        localStorage.callMeUsername = userName;
+    if (userName.length === 0) return;
+
+    const password = (passwordIn && passwordIn.value) || '';
+
+    // Require password for sign in
+    if (!password) {
+        handleError('Password is required. If you do not have an account, please sign up.');
+        return;
+    }
+
+    // Try to login first to obtain a token
+    try {
+        const resp = await axios.post('/api/v1/auth/login', { username: userName, password });
+        if (resp && resp.data && resp.data.token) {
+            localStorage.callMeToken = resp.data.token;
+        }
+    } catch (err) {
+        const msg = err?.response?.data?.error || err.message || err;
+        handleError('Login failed: ' + msg);
+        return;
+    }
+
+    const token = localStorage.callMeToken;
+
+    sendMsg({
+        type: 'signIn',
+        name: userName,
+        token: token,
+    });
+    localStorage.callMeUsername = userName;
+}
+
+async function handleSignUpClick() {
+    const user = usernameIn.value.trim();
+    const password = (passwordIn && passwordIn.value) || '';
+    if (!user || !password) {
+        handleError('Please provide username and password to sign up');
+        return;
+    }
+    try {
+        const resp = await axios.post('/api/v1/auth/signup', { username: user, password });
+        if (resp && resp.data && resp.data.token) {
+            localStorage.callMeToken = resp.data.token;
+            // After signup, directly sign in via socket using the returned token
+            sendMsg({ type: 'signIn', name: user, token: resp.data.token });
+            localStorage.callMeUsername = user;
+        }
+    } catch (err) {
+        handleError('Signup failed', err?.response?.data?.error || err.message || err);
     }
 }
 
